@@ -1,0 +1,7 @@
+{
+  "name": "智能听写小助手",
+  "description": "一款专为小学生设计的智能听写助手，支持AI语音朗读、自定义播放设置和艾宾浩斯遗忘曲线复习。",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
