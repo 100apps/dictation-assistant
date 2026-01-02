@@ -98,14 +98,15 @@ const InputView: React.FC<InputViewProps> = ({ onStart, onCancel, initialTitle, 
   };
 
   const startListening = () => {
-    // Simple browser-based speech recognition for inputting text
-    if (!('webkitSpeechRecognition' in window)) {
-      alert("浏览器不支持语音识别，请手动输入。");
+    // Check for speech recognition support (both standard and webkit prefixed)
+    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+
+    if (!SpeechRecognition) {
+      alert("您的浏览器不支持语音识别功能。\n\n建议使用：\n• Chrome 浏览器\n• Edge 浏览器\n• Safari 浏览器");
       return;
     }
 
     manualStopRef.current = false;
-    const SpeechRecognition = (window as any).webkitSpeechRecognition;
     const recognition = new SpeechRecognition();
     recognition.lang = 'zh-CN';
     recognition.continuous = true;
@@ -126,16 +127,29 @@ const InputView: React.FC<InputViewProps> = ({ onStart, onCancel, initialTitle, 
     };
 
     recognition.onerror = (event: any) => {
+      console.error("Speech Recognition Error:", event.error, event);
+
       // Ignore "no-speech" errors or "aborted" which we intentionally trigger
       if (event.error === 'no-speech' || event.error === 'aborted') {
         return;
       }
 
-      console.error("Speech Recognition Error", event);
-      if (event.error === 'not-allowed') {
-        manualStopRef.current = true;
-        setIsListening(false);
-        alert("请允许麦克风权限以使用语音录入功能。");
+      manualStopRef.current = true;
+      setIsListening(false);
+
+      // Provide helpful error messages
+      switch (event.error) {
+        case 'not-allowed':
+          alert("❌ 请允许麦克风权限\n\n在浏览器设置中允许此网站使用麦克风。");
+          break;
+        case 'network':
+          alert("❌ 网络错误\n\n语音识别需要网络连接，请检查您的网络。");
+          break;
+        case 'service-not-allowed':
+          alert("❌ 服务不可用\n\n您的浏览器或设备可能不支持语音识别。\n\n建议：\n• 使用 Chrome 或 Edge 浏览器\n• 或手动输入词语");
+          break;
+        default:
+          alert(`❌ 语音识别出错 (${event.error})\n\n请尝试：\n• 重新点击麦克风按钮\n• 或手动输入词语`);
       }
     };
 
