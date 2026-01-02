@@ -44,6 +44,11 @@ const InputView: React.FC<InputViewProps> = ({ onStart, onCancel, initialTitle, 
   }, []);
 
   const handleStart = () => {
+    // Stop recording if it's active to prevent conflicts
+    if (isListening) {
+      stopListening();
+    }
+
     const words = text.split('\n').map(w => w.trim()).filter(w => w.length > 0);
     if (words.length > 0) {
       onStart(words, title || '未命名词库');

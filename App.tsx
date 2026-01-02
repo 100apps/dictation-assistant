@@ -435,7 +435,7 @@ const App: React.FC = () => {
       case AppView.DASHBOARD:
       default:
         return (
-          <div className="max-w-4xl mx-auto space-y-4 md:space-y-8 pb-10">
+          <div className="w-full space-y-4 md:space-y-8 pb-10">
             {/* Header */}
             <header className="flex flex-col md:flex-row justify-between items-start md:items-center py-2 md:py-4 gap-4">
               <div>
@@ -602,7 +602,7 @@ const App: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-gray-50 text-gray-900 font-sans selection:bg-indigo-100 selection:text-indigo-800">
-      <main className="container mx-auto px-2 md:px-4 py-4 md:py-8 min-h-screen flex flex-col">
+      <main className="w-full px-2 md:px-4 py-4 md:py-8 min-h-screen flex flex-col">
         {renderContent()}
       </main>
     </div>
