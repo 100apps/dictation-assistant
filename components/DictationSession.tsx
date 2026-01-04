@@ -142,7 +142,7 @@ const DictationSession: React.FC<DictationSessionProps> = ({ words, settings, on
       setStatus('PLAYING');
 
       // 小延迟确保UI更新
-      await new Promise(r => setTimer(r, 300));
+      await new Promise<void>(r => setTimer(() => r(), 300));
 
       // 如果在等待中被暂停，则不播放
       if (isPausedRef.current) {
