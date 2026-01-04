@@ -73,7 +73,7 @@ export const speakText = async (text: string, voiceName: string): Promise<void> 
     } else {
       console.warn(`未找到语音: ${voiceName}，可用语音:`, voices.map(v => v.name));
       // Use first Chinese voice as fallback
-      const chineseVoice = voices.find(v => v.lang.includes('zh') || v.lang.includes('CN'));
+      const chineseVoice = voices.find(v => v.lang.includes('CN'));
       if (chineseVoice) {
         utterance.voice = chineseVoice;
         console.log('Using fallback Chinese voice:', chineseVoice.name);
