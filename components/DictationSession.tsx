@@ -14,8 +14,8 @@ const DictationSession: React.FC<DictationSessionProps> = ({ words, settings, on
   const [playQueue, setPlayQueue] = useState<WordItem[]>([]);
   const [currentIndex, setCurrentIndex] = useState(0);
 
-  // States: IDLE (ready to play), PLAYING (audio on), WAITING (writing time), DONE (finished), ERROR (playback failed)
-  const [status, setStatus] = useState<'IDLE' | 'PLAYING' | 'WAITING' | 'DONE' | 'ERROR'>('IDLE');
+  // States: IDLE (ready to play), PLAYING (audio on), WAITING (writing time), DONE (finished), ERROR (playback failed), PAUSED (paused)
+  const [status, setStatus] = useState<'IDLE' | 'PLAYING' | 'WAITING' | 'DONE' | 'ERROR' | 'PAUSED'>('IDLE');
   const [error, setError] = useState<string | null>(null);
   const [timeLeft, setTimeLeft] = useState(0);
 
@@ -25,6 +25,9 @@ const DictationSession: React.FC<DictationSessionProps> = ({ words, settings, on
   const mountedRef = useRef(true);
   const waitResolveRef = useRef<(() => void) | null>(null);
   const playCurrentWordRef = useRef<(() => Promise<void>) | null>(null);
+  const isPausedRef = useRef(false);
+  const pauseResolveRef = useRef<(() => void) | null>(null);
+  const intervalIdRef = useRef<NodeJS.Timeout | null>(null);
 
   // Initialize Queue
   useEffect(() => {
@@ -78,7 +81,7 @@ const DictationSession: React.FC<DictationSessionProps> = ({ words, settings, on
       setStatus('WAITING');
       setTimeLeft(settings.intervalSeconds);
 
-      const intervalId = setInterval(() => {
+      const interval = setInterval(() => {
         setTimeLeft((prev) => {
           if (prev <= 1) {
             return 0;
@@ -86,18 +89,22 @@ const DictationSession: React.FC<DictationSessionProps> = ({ words, settings, on
           return prev - 1;
         });
       }, 1000);
+      intervalIdRef.current = interval;
 
-      // Wait for the full interval OR skip
+      // Wait for the full interval OR skip OR pause
       await new Promise<void>(resolve => {
         const timerId = setTimeout(resolve, settings.intervalSeconds * 1000);
         waitResolveRef.current = () => {
           clearTimeout(timerId);
           resolve();
         };
+        pauseResolveRef.current = resolve;
       });
 
-      clearInterval(intervalId);
+      clearInterval(interval);
+      intervalIdRef.current = null;
       waitResolveRef.current = null;
+      pauseResolveRef.current = null;
 
       // 4. Move to Next
       setRepeatCount(0);
@@ -155,6 +162,22 @@ const DictationSession: React.FC<DictationSessionProps> = ({ words, settings, on
     setStatus('IDLE'); // This will trigger useEffect -> playCurrentWord
   };
 
+  const handlePause = () => {
+    isPausedRef.current = true;
+    cancelSpeech();
+    setStatus('PAUSED');
+  };
+
+  const handleResume = () => {
+    isPausedRef.current = false;
+    setStatus('WAITING');
+    // Resume the pause loop by resolving the pause promise
+    if (pauseResolveRef.current) {
+      pauseResolveRef.current();
+      pauseResolveRef.current = null;
+    }
+  };
+
   const progress = Math.round(((currentIndex) / playQueue.length) * 100);
 
   return (
@@ -181,9 +204,11 @@ const DictationSession: React.FC<DictationSessionProps> = ({ words, settings, on
               ? 'bg-indigo-100 text-indigo-600 scale-110 shadow-indigo-200 shadow-xl'
               : status === 'WAITING'
                 ? 'bg-amber-100 text-amber-600'
-                : status === 'ERROR'
-                  ? 'bg-red-50 text-red-500'
-                  : 'bg-gray-100 text-gray-400'
+                : status === 'PAUSED'
+                  ? 'bg-blue-100 text-blue-600'
+                  : status === 'ERROR'
+                    ? 'bg-red-50 text-red-500'
+                    : 'bg-gray-100 text-gray-400'
               }`}>
 
               {status === 'PLAYING' && (
@@ -192,6 +217,10 @@ const DictationSession: React.FC<DictationSessionProps> = ({ words, settings, on
 
               {status === 'WAITING' && (
                 <span className="text-4xl md:text-6xl font-mono font-bold">{timeLeft}</span>
+              )}
+
+              {status === 'PAUSED' && (
+                <svg className="w-16 h-16 md:w-24 md:h-24" fill="currentColor" viewBox="0 0 24 24"><path d="M6 4h4v16H6V4zm8 0h4v16h-4V4z" /></svg>
               )}
 
               {status === 'ERROR' && (
@@ -223,6 +252,7 @@ const DictationSession: React.FC<DictationSessionProps> = ({ words, settings, on
               </div>
             )}
             {status === 'PLAYING' && <p className="text-indigo-500 font-medium">请仔细听...</p>}
+            {status === 'PAUSED' && <p className="text-blue-500 font-medium">已暂停</p>}
             {status === 'DONE' && <p className="text-green-500 font-bold text-xl">听写完成！</p>}
           </div>
 
@@ -237,15 +267,37 @@ const DictationSession: React.FC<DictationSessionProps> = ({ words, settings, on
             结束听写
           </button>
 
-          {/* Optional Skip Button */}
-          {status === 'WAITING' && (
-            <button
-              onClick={handleSkipWait}
-              className="text-indigo-600 hover:text-indigo-800 font-medium transition-colors px-4 py-2"
-            >
-              跳过等待
-            </button>
-          )}
+          <div className="flex gap-2">
+            {/* Pause/Resume Button - Show during PLAYING or WAITING */}
+            {(status === 'PLAYING' || status === 'WAITING') && (
+              <button
+                onClick={handlePause}
+                className="text-blue-600 hover:text-blue-800 font-medium transition-colors px-4 py-2"
+              >
+                暂停
+              </button>
+            )}
+
+            {/* Resume Button - Show during PAUSED */}
+            {status === 'PAUSED' && (
+              <button
+                onClick={handleResume}
+                className="text-blue-600 hover:text-blue-800 font-medium transition-colors px-4 py-2"
+              >
+                继续
+              </button>
+            )}
+
+            {/* Skip Button - Show during WAITING (unless paused) */}
+            {status === 'WAITING' && (
+              <button
+                onClick={handleSkipWait}
+                className="text-indigo-600 hover:text-indigo-800 font-medium transition-colors px-4 py-2"
+              >
+                跳过等待
+              </button>
+            )}
+          </div>
         </div>
       </div>
     </div>
