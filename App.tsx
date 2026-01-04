@@ -13,6 +13,9 @@ const App: React.FC = () => {
   const [view, setView] = useState<AppView>(AppView.DASHBOARD);
   const [words, setWords] = useState<WordItem[]>(() => loadWords());
   const [settings, setSettings] = useState<DictationSettings>(() => loadSettings());
+  const [avatar, setAvatar] = useState<string>(() => {
+    return localStorage.getItem('userAvatar') || '/photo/duoduo.png';
+  });
 
   // Session State
   const [sessionWords, setSessionWords] = useState<WordItem[]>([]);
@@ -22,6 +25,7 @@ const App: React.FC = () => {
 
   // Notification Throttling
   const lastNotificationTimeRef = useRef<number>(0);
+  const avatarInputRef = useRef<HTMLInputElement>(null);
 
   // Auto-save words to localStorage whenever they change
   useEffect(() => {
@@ -100,6 +104,23 @@ const App: React.FC = () => {
   };
 
   const handleOpenSettings = () => setView(AppView.SETTINGS);
+
+  const handleAvatarChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file && file.type.startsWith('image/')) {
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        const result = event.target?.result as string;
+        setAvatar(result);
+        localStorage.setItem('userAvatar', result);
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
+  const handleAvatarClick = () => {
+    avatarInputRef.current?.click();
+  };
 
   const handleSaveWords = (inputWords: string[], title: string) => {
     const now = Date.now();
@@ -445,12 +466,22 @@ const App: React.FC = () => {
               {/* Content */}
               <div className="relative z-10 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
                 <div className="flex items-center gap-4">
-                  {/* Icon */}
-                  <div className="bg-white/20 backdrop-blur-sm p-3 rounded-2xl">
-                    <svg className="w-8 h-8 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                    </svg>
+                  {/* Avatar */}
+                  <div
+                    className="bg-white/20 backdrop-blur-sm p-1 rounded-2xl cursor-pointer hover:bg-white/30 transition-all"
+                    onClick={handleAvatarClick}
+                  >
+                    <div className="w-12 h-12 rounded-xl overflow-hidden bg-white/10 flex items-center justify-center">
+                      <img src={avatar} alt="Avatar" className="w-full h-full object-cover" />
+                    </div>
                   </div>
+                  <input
+                    ref={avatarInputRef}
+                    type="file"
+                    accept="image/*"
+                    onChange={handleAvatarChange}
+                    className="hidden"
+                  />
 
                   <div>
                     <h1 className="text-2xl md:text-3xl font-extrabold text-white tracking-tight flex items-center gap-2">
