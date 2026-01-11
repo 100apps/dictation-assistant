@@ -1,12 +1,13 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { WordItem, DictationSettings, PlaybackOrder } from '../types';
-import { speakText, cancelSpeech } from '../services/geminiService';
+import { speakText, cancelSpeech, warmupTTS } from '../services/geminiService';
 
 interface DictationSessionProps {
   words: WordItem[];
   settings: DictationSettings;
   onComplete: (playedWords?: WordItem[]) => void;
   onCancel: () => void;
+  onOpenSettings?: () => void; // 打开设置
 }
 
 /**
@@ -29,7 +30,7 @@ interface DictationSessionProps {
  * - 避免复杂的递归调用，使用简单的条件判断
  */
 
-const DictationSession: React.FC<DictationSessionProps> = ({ words, settings, onComplete, onCancel }) => {
+const DictationSession: React.FC<DictationSessionProps> = ({ words, settings, onComplete, onCancel, onOpenSettings }) => {
   // ==================== 状态定义 ====================
 
   // 有序单词列表
@@ -39,7 +40,7 @@ const DictationSession: React.FC<DictationSessionProps> = ({ words, settings, on
   const [currentWordIndex, setCurrentWordIndex] = useState(0);
 
   // 当前播放状态
-  const [status, setStatus] = useState<'IDLE' | 'PLAYING' | 'WAITING' | 'PAUSED' | 'DONE' | 'ERROR'>('IDLE');
+  const [status, setStatus] = useState<'INIT' | 'IDLE' | 'PLAYING' | 'WAITING' | 'PAUSED' | 'DONE' | 'ERROR'>('INIT');
 
   // 错误信息
   const [error, setError] = useState<string | null>(null);
@@ -64,11 +65,43 @@ const DictationSession: React.FC<DictationSessionProps> = ({ words, settings, on
   // 是否正在播放中（防止重复触发）
   const isPlayingRef = useRef(false);
 
+  // 帮助弹窗
+  const [showHelp, setShowHelp] = useState(false);
+
 
   // ==================== 工具函数 ====================
 
   /**
-   * 注册定时器，确保cleanup时能清理
+   * 根据单词长度计算动态的等待间隔时间
+   * 中文: 按字数计算
+   * 英文: 按字母数的一半计算
+   * 总时间 = (中文字数 + 英文字母数/2) × 每字间隔
+   */
+  const calculateWaitingTime = useCallback((word: WordItem): number => {
+    let chineseCharCount = 0;
+    let englishCharCount = 0;
+
+    // 统计中文字数和英文字母数
+    for (const char of word.text) {
+      const code = char.charCodeAt(0);
+      // 中文Unicode范围: 4E00-9FFF (CJK Unified Ideographs)
+      if (code >= 0x4e00 && code <= 0x9fff) {
+        chineseCharCount++;
+      } else if (/[a-zA-Z]/.test(char)) {
+        englishCharCount++;
+      }
+    }
+
+    // 计算总的"字数当量"
+    const totalCharUnits = chineseCharCount + englishCharCount / 2;
+    const dynamicTime = Math.max(1, totalCharUnits * settings.perCharInterval);
+
+    console.log(`Word: "${word.text}" (中${chineseCharCount}+英${englishCharCount}) -> Wait time: ${dynamicTime.toFixed(1)}s`);
+    return Math.round(dynamicTime);
+  }, [settings.perCharInterval]);
+
+  /**
+   * Register a timer and track it for cleanup
    */
   const setTimer = useCallback((fn: () => void, delay: number) => {
     const timer = setTimeout(fn, delay);
@@ -77,7 +110,7 @@ const DictationSession: React.FC<DictationSessionProps> = ({ words, settings, on
   }, []);
 
   /**
-   * 注册计时器，确保cleanup时能清理
+   * Register an interval and track it for cleanup
    */
   const setInterval_ = useCallback((fn: () => void, interval: number) => {
     const timer = setInterval(fn, interval);
@@ -96,22 +129,33 @@ const DictationSession: React.FC<DictationSessionProps> = ({ words, settings, on
   // ==================== 初始化 ====================
 
   useEffect(() => {
-    // 初始化播放队列
-    let queue = [...words];
-    if (settings.order === PlaybackOrder.REVERSE) {
-      queue.reverse();
-    } else if (settings.order === PlaybackOrder.SHUFFLE) {
-      queue = queue.sort(() => Math.random() - 0.5);
-    }
+    // 预热 TTS 引擎 (iPad Safari 需要)
+    const initSession = async () => {
+      // 初始化播放队列
+      let queue = [...words];
+      if (settings.order === PlaybackOrder.REVERSE) {
+        queue.reverse();
+      } else if (settings.order === PlaybackOrder.SHUFFLE) {
+        queue = queue.sort(() => Math.random() - 0.5);
+      }
 
-    setPlayQueue(queue);
-    setCurrentWordIndex(0);
-    setStatus('IDLE');
-    currentRepeatRef.current = 0;
-    isPausedRef.current = false;
-    setError(null);
+      setPlayQueue(queue);
+      setCurrentWordIndex(0);
+      setStatus('INIT'); // 初始化中
+      currentRepeatRef.current = 0;
+      isPausedRef.current = false;
+      setError(null);
 
-    console.log('DictationSession initialized with', queue.length, 'words');
+      console.log('DictationSession initializing, warming up TTS...');
+
+      // 预热 TTS
+      await warmupTTS();
+
+      console.log('TTS warmed up, starting playback with', queue.length, 'words');
+      setStatus('IDLE'); // 现在可以开始播放
+    };
+
+    initSession();
   }, [words, settings.order]);
 
   // ==================== 核心播放逻辑 ====================
@@ -165,14 +209,18 @@ const DictationSession: React.FC<DictationSessionProps> = ({ words, settings, on
       // 2. 进入等待阶段
       currentRepeatRef.current = 0;
       setStatus('WAITING');
+
+      // 根据单词长度动态计算等待时间
+      const dynamicWaitTime = calculateWaitingTime(word);
+
       waitingStartTimeRef.current = Date.now();
-      setTimeLeft(settings.intervalSeconds);
+      setTimeLeft(dynamicWaitTime);
 
       // 启动倒计时
       const countdownInterval = setInterval_(() => {
         if (!isPausedRef.current) {
           const elapsed = Math.floor((Date.now() - waitingStartTimeRef.current) / 1000);
-          const remaining = Math.max(0, settings.intervalSeconds - elapsed);
+          const remaining = Math.max(0, dynamicWaitTime - elapsed);
           setTimeLeft(remaining);
         }
       }, 1000);
@@ -187,11 +235,11 @@ const DictationSession: React.FC<DictationSessionProps> = ({ words, settings, on
           }
 
           const elapsed = Math.floor((Date.now() - waitingStartTimeRef.current) / 1000);
-          if (elapsed >= settings.intervalSeconds) {
+          if (elapsed >= dynamicWaitTime) {
             resolve();
           } else {
             // 继续等待
-            const remaining = settings.intervalSeconds - elapsed;
+            const remaining = dynamicWaitTime - elapsed;
             setTimer(checkComplete, remaining * 1000);
           }
         };
@@ -213,7 +261,7 @@ const DictationSession: React.FC<DictationSessionProps> = ({ words, settings, on
     } finally {
       isPlayingRef.current = false;
     }
-  }, [currentWordIndex, playQueue, settings, setTimer, setInterval_]);
+  }, [currentWordIndex, playQueue, settings, setTimer, setInterval_, calculateWaitingTime]);
 
 
   // ==================== 自动播放触发 ====================
@@ -294,6 +342,14 @@ const DictationSession: React.FC<DictationSessionProps> = ({ words, settings, on
   return (
     <div className="flex flex-col items-center justify-center h-full w-full p-2 md:p-6">
       <div className="w-full max-w-lg bg-white rounded-3xl shadow-xl overflow-hidden relative min-h-[400px] md:min-h-[500px] flex flex-col">
+        {/* 右上角帮助图标 */}
+        <button
+          title="帮助"
+          className="absolute top-3 right-3 z-10 w-8 h-8 rounded-full bg-gray-100 hover:bg-indigo-100 text-gray-400 hover:text-indigo-600 flex items-center justify-center transition-colors"
+          onClick={() => setShowHelp(true)}
+        >
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+        </button>
         {/* 进度条 */}
         <div className="w-full h-2 bg-gray-100">
           <div
@@ -342,6 +398,16 @@ const DictationSession: React.FC<DictationSessionProps> = ({ words, settings, on
                 <svg className="w-12 h-12 md:w-16 md:h-16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
               )}
 
+              {/* 初始化中 */}
+              {status === 'INIT' && (
+                <div className="flex flex-col items-center">
+                  <svg className="w-10 h-10 md:w-14 md:h-14 text-indigo-400 animate-spin" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                  </svg>
+                </div>
+              )}
+
               {/* 空闲或完成 */}
               {(status === 'IDLE' || status === 'DONE') && (
                 <svg className="w-10 h-10 md:w-14 md:h-14 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 12h.01M12 12h.01M19 12h.01M6 12a1 1 0 11-2 0 1 1 0 012 0zm7 0a1 1 0 11-2 0 1 1 0 012 0zm7 0a1 1 0 11-2 0 1 1 0 012 0z" /></svg>
@@ -369,6 +435,7 @@ const DictationSession: React.FC<DictationSessionProps> = ({ words, settings, on
                 </button>
               </div>
             )}
+            {status === 'INIT' && <p className="text-gray-400 font-medium">正在准备...</p>}
             {status === 'PLAYING' && <p className="text-indigo-500 font-medium">请仔细听...</p>}
             {status === 'PAUSED' && <p className="text-blue-500 font-medium">已暂停</p>}
             {status === 'DONE' && <p className="text-green-500 font-bold text-xl">听写完成！</p>}
@@ -418,6 +485,28 @@ const DictationSession: React.FC<DictationSessionProps> = ({ words, settings, on
           </div>
         </div>
       </div>
+      {/* 帮助弹窗 */}
+      {showHelp && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="w-full max-w-sm bg-white rounded-2xl shadow-2xl p-5">
+            <div className="flex items-start justify-between mb-3">
+              <h3 className="text-base font-bold text-gray-800 flex items-center gap-2">
+                <svg className="w-5 h-5 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                使用提醒
+              </h3>
+              <button className="text-gray-400 hover:text-gray-600 text-lg" onClick={() => setShowHelp(false)}>✕</button>
+            </div>
+            <div className="text-sm text-gray-600 space-y-2">
+              <p>如果没有声音，请到设置页面选择适配本机的 TTS 引擎（本地语音）。</p>
+              <p className="text-xs text-gray-500">提示：不同系统/浏览器可用的语音列表不同，请选择一个能正常发声的发音人。</p>
+            </div>
+            <div className="mt-4 flex justify-end gap-2">
+              <button className="px-3 py-1.5 text-sm rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50" onClick={() => setShowHelp(false)}>知道了</button>
+              <button className="px-3 py-1.5 text-sm rounded-lg bg-indigo-600 text-white font-bold hover:bg-indigo-700" onClick={() => { setShowHelp(false); onOpenSettings?.(); }}>去设置页面</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

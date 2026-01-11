@@ -3,6 +3,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { AppView, WordItem, DictationSettings, DEFAULT_SETTINGS, DictationMode } from './types';
 import { loadWords, saveWords, loadSettings, saveSettings, calculateNextReview } from './services/storageService';
 import { sendNotification, requestNotificationPermission, getNotificationPermissionState } from './services/notificationService';
+import { getSystemVoices } from './services/geminiService';
 import InputView from './components/InputView';
 import DictationSession from './components/DictationSession';
 import CorrectionView from './components/CorrectionView';
@@ -38,6 +39,34 @@ const App: React.FC = () => {
     saveSettings(settings);
     console.log('Settings saved to localStorage');
   }, [settings]);
+
+  // Auto-select a default voice for Safari compatibility if voice is empty
+  useEffect(() => {
+    if (!settings.voice || settings.voice.trim() === '') {
+      const loadVoices = () => {
+        const voices = getSystemVoices();
+        if (voices.length > 0) {
+          // Prefer Chinese voices
+          const chineseVoice = voices.find(v => v.lang.includes('zh') || v.lang.includes('CN'));
+          const defaultVoice = chineseVoice ? chineseVoice.name : voices[0].name;
+
+          console.log('Auto-selecting default voice:', defaultVoice);
+          setSettings(prev => ({ ...prev, voice: defaultVoice }));
+        }
+      };
+
+      // Try immediately
+      loadVoices();
+
+      // Also listen for voiceschanged event (in case voices load late)
+      const handler = () => loadVoices();
+      window.speechSynthesis.onvoiceschanged = handler;
+
+      return () => {
+        window.speechSynthesis.onvoiceschanged = null;
+      };
+    }
+  }, [settings.voice]);
 
   // --- Notification Logic ---
   useEffect(() => {
@@ -203,6 +232,14 @@ const App: React.FC = () => {
     setView(AppView.WORD_LIST);
   }
 
+  const handleViewDueWords = () => {
+    setView(AppView.VIEW_DUE_WORDS);
+  };
+
+  const handleViewErrorWords = () => {
+    setView(AppView.VIEW_ERROR_WORDS);
+  };
+
   // New generic status toggler
   const handleUpdateWordStatus = (targetWord: WordItem, status: 'REVIEW' | 'MASTERED') => {
     const updated = words.map(w => {
@@ -337,7 +374,11 @@ const App: React.FC = () => {
       version: 1,
       exportDate: new Date().toISOString(),
       words: words,
-      settings: settings
+      // Exclude TTS engine (voice) from export per requirement
+      settings: (() => {
+        const { voice, ...rest } = settings;
+        return rest;
+      })()
     };
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
@@ -365,10 +406,11 @@ const App: React.FC = () => {
             importedWordsCount = data.words.length;
           }
           if (data.settings && typeof data.settings === 'object') {
-            setSettings(prev => ({ ...prev, ...data.settings }));
+            const { voice: _ignored, ...restSettings } = data.settings;
+            setSettings(prev => ({ ...prev, ...restSettings }));
           }
 
-          alert(`成功导入 ${importedWordsCount} 个词语和设置！`);
+          alert(`成功导入 ${importedWordsCount} 个词语！`);
         }
       } catch (err) {
         console.error("Import Error:", err);
@@ -440,6 +482,28 @@ const App: React.FC = () => {
           />
         );
 
+      case AppView.VIEW_DUE_WORDS:
+        return (
+          <WordListView
+            title="全部需复习的词"
+            words={allDueWords}
+            onBack={() => setView(AppView.DASHBOARD)}
+            onUpdateStatus={handleUpdateWordStatus}
+            onDeleteWord={handleDeleteWord}
+          />
+        );
+
+      case AppView.VIEW_ERROR_WORDS:
+        return (
+          <WordListView
+            title="错词记录"
+            words={hasHistoryWords}
+            onBack={() => setView(AppView.DASHBOARD)}
+            onUpdateStatus={handleUpdateWordStatus}
+            onDeleteWord={handleDeleteWord}
+          />
+        );
+
       case AppView.DICTATION:
         return (
           <DictationSession
@@ -447,6 +511,7 @@ const App: React.FC = () => {
             settings={settings}
             onComplete={handleDictationComplete}
             onCancel={() => setView(AppView.DASHBOARD)}
+            onOpenSettings={() => setView(AppView.SETTINGS)}
           />
         );
 
@@ -520,23 +585,43 @@ const App: React.FC = () => {
 
                 <div className="flex flex-col sm:flex-row gap-3 w-full">
                   {allDueWords.length > 0 && (
-                    <button
-                      onClick={handleStartGlobalReview}
-                      className="flex-1 py-3 px-6 bg-white text-indigo-700 rounded-xl font-bold text-lg shadow-lg hover:bg-indigo-50 transition-transform active:scale-95 flex items-center justify-center gap-2"
-                    >
-                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
-                      复习全部错词
-                    </button>
+                    <div className="flex-1 flex items-stretch gap-2">
+                      <button
+                        onClick={handleStartGlobalReview}
+                        className="flex-1 py-3 px-6 bg-white text-indigo-700 rounded-xl font-bold text-lg shadow-lg hover:bg-indigo-50 transition-transform active:scale-95 flex items-center justify-center gap-2"
+                      >
+                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                        复习当前标记为错误的词
+                      </button>
+                      <button
+                        onClick={handleViewDueWords}
+                        className="relative px-4 py-3 bg-white text-indigo-700 rounded-xl font-bold shadow-lg hover:bg-indigo-50 transition-all flex items-center justify-center"
+                        title="查看标记错误的词"
+                      >
+                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" /></svg>
+                        <span className="absolute -top-2 -right-2 bg-red-500 text-white text-xs font-bold rounded-full w-5 h-5 flex items-center justify-center">{allDueWords.length}</span>
+                      </button>
+                    </div>
                   )}
 
                   {hasHistoryWords.length > 0 && (
-                    <button
-                      onClick={handleSmartReview}
-                      className="flex-1 py-3 px-6 bg-indigo-800 text-indigo-100 border border-indigo-500 rounded-xl font-bold text-lg shadow-lg hover:bg-indigo-700 transition-transform active:scale-95 flex items-center justify-center gap-2"
-                    >
-                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19.428 15.428a2 2 0 00-1.022-.547l-2.387-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z" /></svg>
-                      巩固复习错词
-                    </button>
+                    <div className="flex-1 flex items-stretch gap-2">
+                      <button
+                        onClick={handleSmartReview}
+                        className="flex-1 py-3 px-6 bg-indigo-800 text-indigo-100 border border-indigo-500 rounded-xl font-bold text-lg shadow-lg hover:bg-indigo-700 transition-transform active:scale-95 flex items-center justify-center gap-2"
+                      >
+                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19.428 15.428a2 2 0 00-1.022-.547l-2.387-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z" /></svg>
+                        巩固曾经错过的词
+                      </button>
+                      <button
+                        onClick={handleViewErrorWords}
+                        className="relative px-4 py-3 bg-indigo-800 text-indigo-100 border border-indigo-500 rounded-xl font-bold shadow-lg hover:bg-indigo-700 transition-all flex items-center justify-center"
+                        title="查看曾经错词列表"
+                      >
+                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" /></svg>
+                        <span className="absolute -top-2 -right-2 bg-red-500 text-white text-xs font-bold rounded-full w-5 h-5 flex items-center justify-center">{hasHistoryWords.length}</span>
+                      </button>
+                    </div>
                   )}
                 </div>
               </div>

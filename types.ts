@@ -9,7 +9,7 @@ export interface WordItem {
   streak: number; // Consecutive correct answers
   easeFactor: number; // For Spaced Repetition (Sm-2 inspired)
   interval: number; // Days until next review
-  
+
   // New Stats for Smart Review
   totalAttempts?: number;
   totalWrong?: number;
@@ -23,6 +23,8 @@ export enum AppView {
   CORRECTION = 'CORRECTION',
   SETTINGS = 'SETTINGS',
   WORD_LIST = 'WORD_LIST',
+  VIEW_DUE_WORDS = 'VIEW_DUE_WORDS',
+  VIEW_ERROR_WORDS = 'VIEW_ERROR_WORDS',
 }
 
 export enum DictationMode {
@@ -39,6 +41,7 @@ export enum PlaybackOrder {
 export interface DictationSettings {
   voice: string; // Now stores the Voice Name or URI
   intervalSeconds: number;
+  perCharInterval: number; // 每个字符的间隔时间（秒）
   order: PlaybackOrder;
   autoRepeat: number; // 1 = play once, 2 = play twice, etc.
   maxReviewBatchSize: number; // Max items for smart review
@@ -48,6 +51,7 @@ export interface DictationSettings {
 export const DEFAULT_SETTINGS: DictationSettings = {
   voice: '', // Empty string implies default system voice
   intervalSeconds: 5,
+  perCharInterval: 2, // 每个字2秒
   order: PlaybackOrder.SEQUENTIAL,
   autoRepeat: 1,
   maxReviewBatchSize: 10,

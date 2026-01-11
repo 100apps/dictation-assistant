@@ -6,6 +6,69 @@
 // We must keep the utterance in memory globally
 const activeUtterances: Set<SpeechSynthesisUtterance> = new Set();
 
+// Track if TTS has been warmed up
+let ttsWarmedUp = false;
+
+/**
+ * Warm up TTS engine - required on iPad Safari before first real speech
+ * This speaks a silent/empty utterance to "wake up" the speech engine
+ */
+export const warmupTTS = async (): Promise<void> => {
+  if (ttsWarmedUp) {
+    console.log('TTS already warmed up');
+    return;
+  }
+
+  if (!('speechSynthesis' in window)) {
+    return;
+  }
+
+  console.log('Warming up TTS engine...');
+
+  try {
+    // Ensure voices are loaded first
+    await ensureVoicesLoaded();
+
+    // Speak a silent utterance to wake up the engine
+    const utterance = new SpeechSynthesisUtterance('');
+    utterance.volume = 0; // Silent
+
+    // Add to active set to prevent GC
+    activeUtterances.add(utterance);
+
+    return new Promise<void>((resolve) => {
+      utterance.onend = () => {
+        console.log('TTS warmup complete');
+        ttsWarmedUp = true;
+        activeUtterances.delete(utterance);
+        resolve();
+      };
+
+      utterance.onerror = () => {
+        console.log('TTS warmup error (may be normal)');
+        ttsWarmedUp = true; // Still mark as done
+        activeUtterances.delete(utterance);
+        resolve();
+      };
+
+      // Timeout fallback
+      setTimeout(() => {
+        if (!ttsWarmedUp) {
+          console.log('TTS warmup timeout');
+          ttsWarmedUp = true;
+          activeUtterances.delete(utterance);
+          resolve();
+        }
+      }, 1000);
+
+      window.speechSynthesis.speak(utterance);
+    });
+  } catch (e) {
+    console.warn('TTS warmup failed:', e);
+    ttsWarmedUp = true; // Mark as done anyway
+  }
+};
+
 // Ensure voices are loaded before first use
 const ensureVoicesLoaded = (): Promise<SpeechSynthesisVoice[]> => {
   return new Promise((resolve) => {
@@ -18,25 +81,38 @@ const ensureVoicesLoaded = (): Promise<SpeechSynthesisVoice[]> => {
 
     console.log('Waiting for voices to load...');
 
-    // Wait for voiceschanged event
-    const handler = () => {
-      const loadedVoices = window.speechSynthesis.getVoices();
-      console.log('Voices loaded:', loadedVoices.length);
+    let resolved = false;
+    const resolveOnce = (voices: SpeechSynthesisVoice[], source: string) => {
+      if (resolved) return;
+      resolved = true;
+      console.log(`Voices loaded via ${source}:`, voices.length);
       window.speechSynthesis.onvoiceschanged = null;
-      resolve(loadedVoices);
+      resolve(voices);
     };
 
-    window.speechSynthesis.onvoiceschanged = handler;
+    // Wait for voiceschanged event
+    window.speechSynthesis.onvoiceschanged = () => {
+      const loadedVoices = window.speechSynthesis.getVoices();
+      if (loadedVoices.length > 0) {
+        resolveOnce(loadedVoices, 'voiceschanged event');
+      }
+    };
 
-    // Fallback timeout - if event doesn't fire in 2s, try anyway
-    setTimeout(() => {
+    // Polling fallback for iPad Safari - voiceschanged may never fire
+    let attempts = 0;
+    const maxAttempts = 20; // 2 seconds total
+    const pollInterval = setInterval(() => {
+      attempts++;
       const voices = window.speechSynthesis.getVoices();
       if (voices.length > 0) {
-        console.log('Voices loaded via timeout:', voices.length);
-        window.speechSynthesis.onvoiceschanged = null;
-        resolve(voices);
+        clearInterval(pollInterval);
+        resolveOnce(voices, `polling (attempt ${attempts})`);
+      } else if (attempts >= maxAttempts) {
+        clearInterval(pollInterval);
+        console.warn('No voices found after polling, resolving with empty array');
+        resolveOnce([], 'timeout');
       }
-    }, 2000);
+    }, 100);
   });
 };
 
@@ -64,35 +140,60 @@ export const speakText = async (text: string, voiceName: string): Promise<void> 
     // Add to set to prevent Garbage Collection
     activeUtterances.add(utterance);
 
-    // Find the voice
-    const selectedVoice = voices.find(v => v.name === voiceName);
+    // Find the voice - with fallback strategy for Safari compatibility
+    let selectedVoice: SpeechSynthesisVoice | undefined;
+
+    if (voiceName && voiceName.trim() !== '') {
+      selectedVoice = voices.find(v => v.name === voiceName);
+    }
+
+    // Fallback 1: If voice not found or empty, prefer Chinese voices
+    if (!selectedVoice) {
+      console.warn(`未找到语音: ${voiceName}，使用中文语音`);
+      selectedVoice = voices.find(v => v.lang.includes('zh') || v.lang.includes('CN'));
+    }
+
+    // Fallback 2: If no Chinese voice, use first available
+    if (!selectedVoice) {
+      console.warn('未找到中文语音，使用第一个可用语音');
+      selectedVoice = voices[0];
+    }
 
     if (selectedVoice) {
       utterance.voice = selectedVoice;
       console.log('Using voice:', selectedVoice.name, selectedVoice.lang);
-    } else {
-      console.warn(`未找到语音: ${voiceName}，可用语音:`, voices.map(v => v.name));
-      // Use first Chinese voice as fallback
-      const chineseVoice = voices.find(v => v.lang.includes('CN'));
-      if (chineseVoice) {
-        utterance.voice = chineseVoice;
-        console.log('Using fallback Chinese voice:', chineseVoice.name);
-      }
     }
 
     // Attempt to set lang based on text (defaults to zh-CN if not specified)
     utterance.lang = 'zh-CN';
     utterance.rate = 0.9; // Slightly slower for dictation clarity
 
-    utterance.onend = () => {
-      console.log('Speech ended successfully');
+    let settled = false;
+    let speechStarted = false;
+    let timeoutId: ReturnType<typeof setTimeout>;
+
+    const cleanup = () => {
+      settled = true;
+      clearTimeout(timeoutId);
       activeUtterances.delete(utterance);
+    };
+
+    utterance.onstart = () => {
+      console.log('Speech started');
+      speechStarted = true;
+    };
+
+    utterance.onend = () => {
+      if (settled) return;
+      console.log('Speech ended successfully');
+      cleanup();
       resolve();
     };
 
     utterance.onerror = (e) => {
+      if (settled) return;
       console.error("Speech synthesis error:", e.error, e);
-      activeUtterances.delete(utterance);
+      cleanup();
 
       // On some browsers, cancelling triggers an error, we can treat it as resolved or ignore
       if (e.error === 'interrupted' || e.error === 'canceled') {
@@ -102,9 +203,15 @@ export const speakText = async (text: string, voiceName: string): Promise<void> 
       }
     };
 
-    utterance.onstart = () => {
-      console.log('Speech started');
-    };
+    // Safety timeout - if speech doesn't start within 5s, assume it's stuck (iPad Safari issue)
+    timeoutId = setTimeout(() => {
+      if (settled) return;
+      if (!speechStarted) {
+        console.warn('Speech did not start within 5s, assuming stuck - please configure TTS in settings');
+        cleanup();
+        reject(new Error('语音引擎无响应，请到设置页面选择适配的 TTS 引擎'));
+      }
+    }, 5000);
 
     try {
       console.log('Calling speechSynthesis.speak()...');

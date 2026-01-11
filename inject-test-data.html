@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>测试数据注入</title>
+</head>
+
+<body>
+    <h1>听写助手 - 测试数据注入</h1>
+    <button onclick="injectTestData()">点击注入测试数据</button>
+    <p id="status"></p>
+
+    <script>
+        function injectTestData() {
+            const testWords = [
+                {
+                    id: "word-1",
+                    text: "abandon",
+                    groupTitle: "SAT词汇",
+                    addedAt: 1704873600000,
+                    lastReviewed: null,
+                    nextReview: 1705046400000,
+                    streak: 0,
+                    easeFactor: 2.5,
+                    interval: 0,
+                    totalAttempts: 2,
+                    totalWrong: 2,
+                    lastWrongAt: 1704960000000
+                },
+                {
+                    id: "word-2",
+                    text: "ability",
+                    groupTitle: "SAT词汇",
+                    addedAt: 1704873600000,
+                    lastReviewed: null,
+                    nextReview: 1705046400000,
+                    streak: 0,
+                    easeFactor: 2.5,
+                    interval: 0,
+                    totalAttempts: 3,
+                    totalWrong: 1,
+                    lastWrongAt: 1704873600000
+                },
+                {
+                    id: "word-3",
+                    text: "accelerate",
+                    groupTitle: "SAT词汇",
+                    addedAt: 1704960000000,
+                    lastReviewed: null,
+                    nextReview: 1705046400000,
+                    streak: 0,
+                    easeFactor: 2.5,
+                    interval: 0,
+                    totalAttempts: 1,
+                    totalWrong: 3,
+                    lastWrongAt: 1704873600000
+                }
+            ];
+
+            localStorage.setItem('dictation-words', JSON.stringify(testWords));
+            document.getElementById('status').innerHTML = '✅ 测试数据已注入！现在 <a href="http://localhost:5173/">点击进入应用</a>';
+        }
+    </script>
+</body>
+
+</html>

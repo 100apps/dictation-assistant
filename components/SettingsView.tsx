@@ -68,6 +68,10 @@ const SettingsView: React.FC<SettingsViewProps> = ({ settings, onUpdateSettings,
     setNotifPermission(granted ? 'granted' : 'denied');
   };
 
+  const perChar = settings.perCharInterval.toFixed(1);
+  const exampleEnglish = ((7 * settings.perCharInterval) / 2).toFixed(1);
+  const exampleChinese = (2 * settings.perCharInterval).toFixed(1);
+
   return (
     <div className="flex flex-col items-center justify-center h-full w-full p-2 md:p-6">
       <div className="w-full max-w-2xl bg-white rounded-3xl shadow-xl overflow-hidden relative min-h-[400px] md:min-h-[500px] flex flex-col">
@@ -132,24 +136,29 @@ const SettingsView: React.FC<SettingsViewProps> = ({ settings, onUpdateSettings,
             <p className="mt-2 text-xs text-gray-400">提示：如果没有中文语音，请在电脑或手机的系统设置中添加“中文语音包”。</p>
           </div>
 
-          {/* Interval Slider */}
+          {/* Per Character Interval Slider */}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">
-              听写间隔: <span className="text-indigo-600 font-bold">{settings.intervalSeconds}秒</span>
+              每字间隔: <span className="text-indigo-600 font-bold">{settings.perCharInterval.toFixed(1)}秒</span>
             </label>
             <input
               type="range"
-              min="2"
-              max="15"
-              step="1"
-              value={settings.intervalSeconds}
-              onChange={(e) => onUpdateSettings({ ...settings, intervalSeconds: parseInt(e.target.value) })}
+              min="1"
+              max="10"
+              step="0.5"
+              value={settings.perCharInterval}
+              onChange={(e) => onUpdateSettings({ ...settings, perCharInterval: parseFloat(e.target.value) })}
               className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-indigo-600"
             />
             <div className="flex justify-between text-xs text-gray-400 mt-1">
-              <span>快 (2秒)</span>
-              <span>慢 (15秒)</span>
+              <span>快 (1秒)</span>
+              <span>慢 (10秒)</span>
             </div>
+            <p className="text-xs text-gray-500 mt-2">
+              每个中文字=1个单位，每个英文字母=0.5个单位
+              <br />
+              例如：{perChar}秒/字，"abandon"(7字母) = 7×{perChar}÷2 ≈ {exampleEnglish}秒，"电脑"(2字) = 2×{perChar} ≈ {exampleChinese}秒
+            </p>
           </div>
 
           {/* Silence Threshold Slider */}
